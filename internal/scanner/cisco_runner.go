@@ -828,11 +828,12 @@ func (p *CiscoDataProcessor) storeInterfaces(ctx context.Context, interfaces []s
 
 	for _, iface := range interfaces {
 		// Convert CiscoInterface to unified Interfaces structure
+		assetIDStr := assetID.String()
 		interfaceRecord := types.Interfaces{
 			ID:              uuid.New().String(),
 			InterfaceName:   iface.Name,
 			InterfaceTypeID: 1, // Default interface type - you may want to determine this dynamically
-			AssetID:         &assetID.String(),
+			AssetID:         &assetIDStr,
 			ScannerType:     "cisco", // Mark as Cisco interface
 			CiscoMetadataID: &ciscoMetadataID,
 
@@ -901,12 +902,13 @@ func (p *CiscoDataProcessor) storeVLANs(ctx context.Context, vlans []scannerDoma
 
 		// If no parent found, create a virtual parent interface
 		if parentInterfaceID == "" {
+			assetIDStr := assetID.String()
 			virtualInterfaceID := uuid.New().String()
 			virtualInterface := types.Interfaces{
 				ID:                virtualInterfaceID,
 				InterfaceName:     fmt.Sprintf("VLAN%d-Parent", vlan.ID),
 				InterfaceTypeID:   1,
-				AssetID:           &assetID.String(),
+				AssetID:           &assetIDStr,
 				ScannerType:       "cisco",
 				CiscoMetadataID:   &ciscoMetadataID,
 				Description:       fmt.Sprintf("Virtual parent interface for VLAN %d", vlan.ID),
@@ -1065,12 +1067,13 @@ func (p *CiscoDataProcessor) storeVLANPorts(ctx context.Context, vlanPorts []sca
 	}
 
 	for _, vlanPort := range vlanPorts {
+		assetIDStr := assetID.String()
 		// Create an interface record that represents the VLAN port
 		portInterface := types.Interfaces{
 			ID:              uuid.New().String(),
 			InterfaceName:   vlanPort.PortName,
 			InterfaceTypeID: 1, // Default interface type
-			AssetID:         &assetID.String(),
+			AssetID:         &assetIDStr,
 			ScannerType:     "cisco",
 			CiscoMetadataID: &ciscoMetadataID,
 

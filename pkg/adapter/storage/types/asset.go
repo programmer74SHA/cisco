@@ -61,10 +61,89 @@ type Assets struct {
 	AssetScanJobs   []AssetScanJob    `gorm:"foreignKey:AssetID"`
 	Ports           []Port            `gorm:"foreignKey:AssetID"`
 	VMwareVMs       []VMwareVM        `gorm:"foreignKey:AssetID"`
+	Interfaces      []Interfaces      `gorm:"foreignKey:AssetID"`
 }
 
 func (Assets) TableName() string {
 	return "assets"
+}
+
+// Unified Interfaces table (supports multiple scanner types)
+type Interfaces struct {
+	ID              string  `gorm:"column:id;size:50;primaryKey"`
+	InterfaceName   string  `gorm:"size:100;not null"`
+	InterfaceTypeID uint    `gorm:"not null;index"`
+	AssetID         *string `gorm:"size:50;index"`
+	ScannerType     string  `gorm:"size:50;not null"` // 'cisco', 'firewall', etc.
+	CiscoMetadataID *int64  `gorm:"index"`            // For Cisco relationships
+
+	// Common interface fields
+	Description       string `gorm:"type:text"`
+	IPAddress         string `gorm:"size:45"`
+	SubnetMask        string `gorm:"size:45"`
+	OperationalStatus string `gorm:"type:enum('up','down','unknown');default:'unknown'"`
+	AdminStatus       string `gorm:"type:enum('up','down');default:'up'"`
+	MacAddress        string `gorm:"size:17"`
+	Protocol          string `gorm:"size:50"`
+
+	// VLAN support
+	VLANId     *int   `gorm:"column:vlan_id"`
+	PortType   string `gorm:"size:50"` // For VLAN ports: 'access', 'trunk', etc.
+	PortStatus string `gorm:"size:50"` // For VLAN ports
+
+	// Firewall-specific fields
+	VirtualRouter     string  `gorm:"size:100"`
+	VirtualSystem     string  `gorm:"size:100"`
+	ParentInterfaceID *string `gorm:"size:50;index"` // Self-reference for sub-interfaces
+
+	// Vendor-specific configuration (JSON)
+	VendorSpecificConfig string `gorm:"type:json"`
+
+	CreatedAt time.Time `gorm:"autoCreateTime"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime"`
+
+	// Relationships
+	Asset           *Assets        `gorm:"foreignKey:AssetID"`
+	InterfaceType   InterfaceTypes `gorm:"foreignKey:InterfaceTypeID"`
+	ParentInterface *Interfaces    `gorm:"foreignKey:ParentInterfaceID"` // Self-reference
+	SubInterfaces   []Interfaces   `gorm:"foreignKey:ParentInterfaceID"`
+	VLANs           []VLANs        `gorm:"foreignKey:ParentInterfaceID"`
+	ZoneDetails     []ZoneDetails  `gorm:"foreignKey:InterfaceID"` // Updated field name
+}
+
+func (Interfaces) TableName() string {
+	return "interfaces"
+}
+
+// Unified VLANs table (supports multiple scanner types)
+type VLANs struct {
+	ID                string `gorm:"column:id;size:50;primaryKey"`
+	VLANID            int    `gorm:"not null;column:vlan_id"`
+	VLANName          string `gorm:"size:100"`
+	Description       string `gorm:"type:text"`
+	IsNative          bool   `gorm:"default:false"`
+	ParentInterfaceID string `gorm:"not null;index"`
+	ScannerType       string `gorm:"size:50;not null"` // 'cisco', 'firewall', etc.
+	CiscoMetadataID   *int64 `gorm:"index"`            // For Cisco relationships
+
+	// Cisco-specific fields
+	Status string `gorm:"size:50"`               // 'active', 'suspended', etc.
+	Type   string `gorm:"size:50"`               // 'enet', etc.
+	Parent *int   `gorm:"column:parent_vlan_id"` // Parent VLAN ID
+
+	// Vendor-specific configuration (JSON)
+	VendorSpecificConfig string `gorm:"type:json"`
+
+	CreatedAt time.Time `gorm:"autoCreateTime"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime"`
+
+	// Relationships
+	ParentInterface Interfaces    `gorm:"foreignKey:ParentInterfaceID"`
+	ZoneDetails     []ZoneDetails `gorm:"foreignKey:VLANTableID"`
+}
+
+func (VLANs) TableName() string {
+	return "vlans"
 }
 
 // Firewall details (depends on assets)
@@ -118,58 +197,6 @@ func (Zones) TableName() string {
 	return "zones"
 }
 
-// Firewall interface details (depends on interface_types, has self-reference)
-type FirewallInterfaceDetails struct {
-	ID                   string    `gorm:"column:id;size:50;primaryKey"`
-	InterfaceName        string    `gorm:"size:100;not null;uniqueIndex"`
-	InterfaceTypeID      uint      `gorm:"not null;index"`
-	AssetID              *string   `gorm:"size:50;index"`
-	VirtualRouter        string    `gorm:"size:100"`
-	VirtualSystem        string    `gorm:"size:100"`
-	Description          string    `gorm:"type:text"`
-	OperationalStatus    string    `gorm:"type:enum('up','down','unknown');default:'unknown'"`
-	AdminStatus          string    `gorm:"type:enum('up','down');default:'up'"`
-	ParentInterfaceID    *string   `gorm:"size:50;index"` // Self-reference for sub-interfaces
-	VLANId               *int      `gorm:"column:vlan_id"`
-	MacAddress           string    `gorm:"size:17"`
-	VendorSpecificConfig string    `gorm:"type:json"`
-	CreatedAt            time.Time `gorm:"autoCreateTime"`
-	UpdatedAt            time.Time `gorm:"autoUpdateTime"`
-
-	// Relationships
-	Asset           *Assets                    `gorm:"foreignKey:AssetID"`
-	InterfaceType   InterfaceTypes             `gorm:"foreignKey:InterfaceTypeID"`
-	ParentInterface *FirewallInterfaceDetails  `gorm:"foreignKey:ParentInterfaceID"` // Self-reference
-	SubInterfaces   []FirewallInterfaceDetails `gorm:"foreignKey:ParentInterfaceID"`
-	VLANs           []VLANs                    `gorm:"foreignKey:ParentInterfaceID"`
-	ZoneDetails     []ZoneDetails              `gorm:"foreignKey:FirewallInterfaceID"`
-}
-
-func (FirewallInterfaceDetails) TableName() string {
-	return "firewall_interface_details"
-}
-
-// VLANs table (depends on firewall_interface_details)
-type VLANs struct {
-	ID                   string    `gorm:"column:id;size:50;primaryKey"`
-	VLANID               int       `gorm:"not null;column:vlan_id"`
-	VLANName             string    `gorm:"size:100"`
-	Description          string    `gorm:"type:text"`
-	IsNative             bool      `gorm:"default:false"`
-	VendorSpecificConfig string    `gorm:"type:json"`
-	ParentInterfaceID    string    `gorm:"not null;index"`
-	CreatedAt            time.Time `gorm:"autoCreateTime"`
-	UpdatedAt            time.Time `gorm:"autoUpdateTime"`
-
-	// Relationships
-	// ParentInterface FirewallInterfaceDetails `gorm:"foreignKey:ParentInterfaceID"`
-	ZoneDetails []ZoneDetails `gorm:"foreignKey:VLANTableID"`
-}
-
-func (VLANs) TableName() string {
-	return "vlans"
-}
-
 // Asset IPs (depends on assets)
 type AssetIPs struct {
 	ID          string     `gorm:"column:id;size:50;primaryKey"`
@@ -190,19 +217,23 @@ func (AssetIPs) TableName() string {
 	return "asset_ips"
 }
 
-// Zone details (junction table - depends on zones, firewall_interface_details, and vlans)
+// Zone details (junction table - depends on zones, interfaces, and vlans)
 type ZoneDetails struct {
-	ID                  string    `gorm:"column:id;size:50;primaryKey"`
-	ZoneID              string    `gorm:"not null;index"`
-	FirewallInterfaceID string    `gorm:"not null;index"`
-	VLANTableID         string    `gorm:"not null;index;column:vlan_id"` // References vlans.id
-	CreatedAt           time.Time `gorm:"autoCreateTime"`
-	UpdatedAt           time.Time `gorm:"autoUpdateTime"`
+	ID          string `gorm:"column:id;size:50;primaryKey"`
+	ZoneID      string `gorm:"not null;index"`
+	InterfaceID string `gorm:"not null;index"`                // Updated field name
+	VLANTableID string `gorm:"not null;index;column:vlan_id"` // References vlans.id
+
+	// Legacy firewall support
+	FirewallInterfaceID string `gorm:"index"` // For backward compatibility
+
+	CreatedAt time.Time `gorm:"autoCreateTime"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime"`
 
 	// Relationships
-	Zone              Zones                    `gorm:"foreignKey:ZoneID"`
-	FirewallInterface FirewallInterfaceDetails `gorm:"foreignKey:FirewallInterfaceID"`
-	VLAN              VLANs                    `gorm:"foreignKey:VLANTableID"` // References vlans.id
+	Zone      Zones      `gorm:"foreignKey:ZoneID"`
+	Interface Interfaces `gorm:"foreignKey:InterfaceID"`
+	VLAN      VLANs      `gorm:"foreignKey:VLANTableID"` // References vlans.id
 }
 
 func (ZoneDetails) TableName() string {
@@ -299,7 +330,7 @@ func (u UniqueConstraints) ApplyConstraints(db *gorm.DB) error {
 	}
 
 	// Add unique constraint for zone, interface, and VLAN combination
-	if err := db.Exec("ALTER TABLE zone_details ADD CONSTRAINT unique_zone_interface_vlan UNIQUE (zone_id, firewall_interface_id, vlan_id)").Error; err != nil {
+	if err := db.Exec("ALTER TABLE zone_details ADD CONSTRAINT unique_zone_interface_vlan UNIQUE (zone_id, interface_id, vlan_id)").Error; err != nil {
 		if !strings.Contains(err.Error(), "Duplicate key name") {
 			return err
 		}

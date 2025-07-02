@@ -378,16 +378,16 @@ func (r *FirewallRepo) storeZoneDetails(tx *gorm.DB, interfaces []domain.Interfa
 
 		zoneDetailID := uuid.New().String()
 		zoneDetail := types.ZoneDetails{
-			ID:           zoneDetailID,
-			ZoneID:       zoneID,
-			InterfaceID:  interfaceID,  // Updated field name
-			VLANTableID:  vlanTableID,
+			ID:          zoneDetailID,
+			ZoneID:      zoneID,
+			InterfaceID: interfaceID, // Updated field name
+			VLANTableID: vlanTableID,
 		}
 
 		err := tx.FirstOrCreate(&zoneDetail, types.ZoneDetails{
-			ZoneID:       zoneID,
-			InterfaceID:  interfaceID,  // Updated field name
-			VLANTableID:  vlanTableID,
+			ZoneID:      zoneID,
+			InterfaceID: interfaceID, // Updated field name
+			VLANTableID: vlanTableID,
 		}).Error
 
 		if err != nil {
@@ -402,8 +402,6 @@ func (r *FirewallRepo) storeZoneDetails(tx *gorm.DB, interfaces []domain.Interfa
 	log.Printf("Zone details storage complete: %d relationships created", relationshipCount)
 	return nil
 }
-
-// ... [Rest of the methods remain similar but with updated field names] ...
 
 // Enhanced policy storage with debugging
 func (r *FirewallRepo) storePolicies(tx *gorm.DB, firewallDetailsID string, policies []domain.PolicyData, zoneMap map[string]string) error {
@@ -601,7 +599,7 @@ func (r *FirewallRepo) updateVLANParentRelationships(tx *gorm.DB, interfaceMap m
 		if strings.Contains(interfaceName, ".") {
 			parentName := strings.Split(interfaceName, ".")[0]
 			if parentID, exists := interfaceMap[parentName]; exists {
-				err := tx.Model(&types.FirewallInterfaceDetails{}).
+				err := tx.Model(&types.Interfaces{}).
 					Where("id = ?", interfaceID).
 					Update("parent_interface_id", parentID).Error
 				if err != nil {
@@ -752,11 +750,12 @@ func (r *FirewallRepo) storeInterfacesWithAssets(tx *gorm.DB, assetID string, in
 		vendorConfigJSON, _ := json.Marshal(vendorConfig)
 
 		interfaceID := uuid.New().String()
-		firewallInterface := types.FirewallInterfaceDetails{
+		unifiedInterface := types.Interfaces{
 			ID:                   interfaceID,
 			InterfaceName:        intf.Name,
 			InterfaceTypeID:      interfaceTypeID,
 			AssetID:              interfaceAssetID, // Set the asset ID
+			ScannerType:          "firewall",       // Mark as firewall interface
 			VirtualSystem:        intf.VDOM,
 			Description:          intf.Description,
 			OperationalStatus:    r.normalizeStatus(intf.Status, "operational"),
@@ -767,11 +766,11 @@ func (r *FirewallRepo) storeInterfacesWithAssets(tx *gorm.DB, assetID string, in
 			VendorSpecificConfig: string(vendorConfigJSON),
 		}
 
-		log.Printf("Creating interface record with ID: %s, Asset ID: %v", interfaceID, interfaceAssetID)
+		log.Printf("Creating unified interface record with ID: %s, Asset ID: %v", interfaceID, interfaceAssetID)
 
-		var existingInterface types.FirewallInterfaceDetails
-		err = tx.Where("interface_name = ?", intf.Name).
-			FirstOrCreate(&existingInterface, firewallInterface).Error
+		var existingInterface types.Interfaces
+		err = tx.Table("interfaces").Where("interface_name = ? AND scanner_type = 'firewall'", intf.Name).
+			FirstOrCreate(&existingInterface, unifiedInterface).Error
 		if err != nil {
 			log.Printf("ERROR: Failed to create interface '%s': %v", intf.Name, err)
 			continue

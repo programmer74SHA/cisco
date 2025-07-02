@@ -277,6 +277,7 @@ func (r *assetRepository) GetByIDs(ctx context.Context, assetUUIDs []domain.Asse
 		Preload("Ports", "deleted_at IS NULL").
 		Preload("VMwareVMs").
 		Preload("AssetIPs", "deleted_at IS NULL").
+		Preload("Interfaces", "scanner_type IS NOT NULL"). // Added unified interfaces
 		Where("deleted_at IS NULL")
 
 	if len(assetUUIDs) == 1 {
@@ -342,6 +343,7 @@ func (r *assetRepository) GetByIDsWithSort(ctx context.Context, assetUUIDs []dom
 		Preload("Ports", "deleted_at IS NULL").
 		Preload("VMwareVMs").
 		Preload("AssetIPs", "deleted_at IS NULL").
+		Preload("Interfaces", "scanner_type IS NOT NULL"). // Added unified interfaces
 		Where("assets.deleted_at IS NULL")
 
 	// Apply ID filter
@@ -370,7 +372,7 @@ func (r *assetRepository) GetByIDsWithSort(ctx context.Context, assetUUIDs []dom
 				orderDir = "DESC"
 			}
 
-			if columnMapping.RequiresJoin && (columnMapping.Table == "asset_ips" || columnMapping.Table == "vmware_vms" || columnMapping.Table == "scanners") {
+			if columnMapping.RequiresJoin && (columnMapping.Table == "asset_ips" || columnMapping.Table == "vmware_vms" || columnMapping.Table == "scanners" || columnMapping.Table == "interfaces") {
 				if orderDir == "ASC" {
 					query = query.Order("MIN(" + columnMapping.Column + ") " + orderDir)
 				} else {
@@ -530,7 +532,7 @@ func (r *assetRepository) GetByFilter(ctx context.Context, assetFilter domain.As
 	requiresDistinctCount := false
 	for _, sort := range sortOptions {
 		columnMapping := mapFieldToDBColumn(sort.Field)
-		if columnMapping.RequiresJoin && (columnMapping.Table == "asset_ips" || columnMapping.Table == "vmware_vms" || columnMapping.Table == "scanners") {
+		if columnMapping.RequiresJoin && (columnMapping.Table == "asset_ips" || columnMapping.Table == "vmware_vms" || columnMapping.Table == "scanners" || columnMapping.Table == "interfaces") {
 			requiresDistinctCount = true
 			break
 		}
@@ -572,7 +574,7 @@ func (r *assetRepository) GetByFilter(ctx context.Context, assetFilter domain.As
 				orderDir = "DESC"
 			}
 
-			if columnMapping.RequiresJoin && (columnMapping.Table == "asset_ips" || columnMapping.Table == "vmware_vms" || columnMapping.Table == "scanners") {
+			if columnMapping.RequiresJoin && (columnMapping.Table == "asset_ips" || columnMapping.Table == "vmware_vms" || columnMapping.Table == "scanners" || columnMapping.Table == "interfaces") {
 				// Use MIN/MAX to handle multiple related records for consistent sorting
 				// This ensures deterministic results when an asset has multiple IPs, VMs, or scan jobs
 				if orderDir == "ASC" {
@@ -593,7 +595,7 @@ func (r *assetRepository) GetByFilter(ctx context.Context, assetFilter domain.As
 	hasGroupBy := false
 	for _, sort := range sortOptions {
 		columnMapping := mapFieldToDBColumn(sort.Field)
-		if columnMapping.RequiresJoin && (columnMapping.Table == "asset_ips" || columnMapping.Table == "vmware_vms" || columnMapping.Table == "scanners") {
+		if columnMapping.RequiresJoin && (columnMapping.Table == "asset_ips" || columnMapping.Table == "vmware_vms" || columnMapping.Table == "scanners" || columnMapping.Table == "interfaces") {
 			hasGroupBy = true
 			break
 		}
@@ -604,7 +606,10 @@ func (r *assetRepository) GetByFilter(ctx context.Context, assetFilter domain.As
 	if hasGroupBy {
 		query = query.Select("assets.*")
 	} else {
-		query = query.Preload("Ports", "deleted_at IS NULL").Preload("VMwareVMs").Preload("AssetIPs", "deleted_at IS NULL")
+		query = query.Preload("Ports", "deleted_at IS NULL").
+			Preload("VMwareVMs").
+			Preload("AssetIPs", "deleted_at IS NULL").
+			Preload("Interfaces", "scanner_type IS NOT NULL") // Added unified interfaces
 	}
 
 	// Apply pagination only when limits are set
@@ -660,6 +665,15 @@ func (r *assetRepository) GetByFilter(ctx context.Context, assetFilter domain.As
 		}
 		logger.DebugContext(ctx, "Repository: Loaded %d asset IPs for %d assets", len(assetIPs), len(assetIDs))
 
+		// Load interfaces separately
+		var interfaces []types.Interfaces
+		err = r.db.WithContext(ctx).Where("asset_id IN ? AND scanner_type IS NOT NULL", assetIDs).Find(&interfaces).Error
+		if err != nil {
+			logger.ErrorContext(ctx, "Repository: Failed to load interfaces for grouped assets: %v", err)
+			return nil, 0, err
+		}
+		logger.DebugContext(ctx, "Repository: Loaded %d interfaces for %d assets", len(interfaces), len(assetIDs))
+
 		// Map the related data back to assets
 		portMap := make(map[string][]types.Port)
 		for _, port := range ports {
@@ -676,11 +690,19 @@ func (r *assetRepository) GetByFilter(ctx context.Context, assetFilter domain.As
 			ipMap[ip.AssetID] = append(ipMap[ip.AssetID], ip)
 		}
 
+		interfaceMap := make(map[string][]types.Interfaces)
+		for _, intf := range interfaces {
+			if intf.AssetID != nil {
+				interfaceMap[*intf.AssetID] = append(interfaceMap[*intf.AssetID], intf)
+			}
+		}
+
 		// Assign the related data to assets
 		for i := range assets {
 			assets[i].Ports = portMap[assets[i].ID]
 			assets[i].VMwareVMs = vmwareMap[assets[i].ID]
 			assets[i].AssetIPs = ipMap[assets[i].ID]
+			assets[i].Interfaces = interfaceMap[assets[i].ID]
 		}
 		logger.DebugContext(ctx, "Repository: Mapped related data back to assets")
 	}
@@ -1502,7 +1524,6 @@ func filterColumnsByTable(columns []string, tablePrefix string) []string {
 	}
 
 	logger.Debug("Repository: Filtered %d columns for table %s", len(result), tablePrefix)
-	logger.Debug("Repository: Filtered %d columns for table %s", len(result), tablePrefix)
 	return result
 }
 
@@ -1670,6 +1691,11 @@ var (
 			JoinQuery: "LEFT JOIN vmware_vms ON assets.id = vmware_vms.asset_id",
 			JoinType:  "LEFT",
 		},
+		"interfaces": {
+			Table:     "interfaces",
+			JoinQuery: "LEFT JOIN interfaces ON assets.id = interfaces.asset_id AND interfaces.scanner_type IS NOT NULL",
+			JoinType:  "LEFT",
+		},
 		"scanners": {
 			Table: "scanners",
 			JoinQuery: `LEFT JOIN asset_scan_jobs asj ON assets.id = asj.asset_id
@@ -1690,6 +1716,12 @@ var (
 		"description", "created_at", "updated_at", "logging_completed",
 		"asset_value", "risk",
 	}
+
+	// Interface fields
+	interfaceFields = []string{
+		"interface_name", "scanner_type", "ip_address", "mac_address",
+		"operational_status", "admin_status", "description",
+	}
 )
 
 func mapFieldToDBColumn(field string) ColumnMapping {
@@ -1705,6 +1737,15 @@ func mapFieldToDBColumn(field string) ColumnMapping {
 			RequiresJoin: true,
 			JoinType:     joinConfigs["asset_ips"].JoinType,
 			JoinQuery:    joinConfigs["asset_ips"].JoinQuery,
+		}
+	case "interface_name":
+		logger.Debug("Repository: Mapped field %s to interface name column with join", field)
+		return ColumnMapping{
+			Column:       "interfaces.interface_name",
+			Table:        "interfaces",
+			RequiresJoin: true,
+			JoinType:     joinConfigs["interfaces"].JoinType,
+			JoinQuery:    joinConfigs["interfaces"].JoinQuery,
 		}
 	}
 
@@ -1748,10 +1789,27 @@ func mapFieldToDBColumn(field string) ColumnMapping {
 		if field == assetField || (field == "type" && assetField == "asset_type") {
 			// Map "type" to "asset_type" for backward compatibility
 			columnName := field
+			if field == "type" {
+				columnName = "asset_type"
+			}
 			logger.Debug("Repository: Mapped assets field %s to column %s", field, "assets."+columnName)
 			return ColumnMapping{
 				Column: "assets." + columnName,
 				Table:  "assets",
+			}
+		}
+	}
+
+	// Check if it's an interface field
+	for _, interfaceField := range interfaceFields {
+		if field == interfaceField {
+			logger.Debug("Repository: Mapped interface field %s to column %s with join", field, "interfaces."+field)
+			return ColumnMapping{
+				Column:       "interfaces." + field,
+				Table:        "interfaces",
+				RequiresJoin: true,
+				JoinType:     joinConfigs["interfaces"].JoinType,
+				JoinQuery:    joinConfigs["interfaces"].JoinQuery,
 			}
 		}
 	}

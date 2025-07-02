@@ -68,7 +68,7 @@ func GormMigrations(db *gorm.DB) {
 	err = db.AutoMigrate(
 		&types.Scanner{},
 		&types.ScanJob{},
-		&types.NmapMetadata{}, // This now has FK to NmapProfile
+		&types.NmapMetadata{},
 		&types.NmapIPScan{},
 		&types.NmapNetworkScan{},
 		&types.NmapRangeScan{},
@@ -76,9 +76,6 @@ func GormMigrations(db *gorm.DB) {
 		&types.VcenterMetadata{},
 		&types.FirewallMetadata{},
 		&types.CiscoMetadata{},
-		&types.CiscoInterface{},
-		&types.CiscoVLAN{},
-		&types.CiscoVLANPort{},
 		&types.CiscoVRF{},
 		&types.CiscoRoute{},
 		&types.CiscoNeighbor{},
@@ -93,7 +90,6 @@ func GormMigrations(db *gorm.DB) {
 	err = db.AutoMigrate(
 		&types.FirewallDetails{},
 		&types.Zones{},
-		&types.FirewallInterfaceDetails{},
 		&types.VLANs{},
 		&types.ZoneDetails{},
 		&types.FirewallPolicy{},
