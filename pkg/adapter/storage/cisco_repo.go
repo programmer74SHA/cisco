@@ -19,7 +19,10 @@ func NewCiscoRepo(db *gorm.DB) *CiscoRepo {
 	}
 }
 
-// GetCiscoMetadataIDByAssetID retrieves the Cisco metadata ID for a given asset
+// ============================================================================
+// METADATA OPERATIONS
+// ============================================================================
+
 func (r *CiscoRepo) GetCiscoMetadataIDByAssetID(ctx context.Context, assetID assetDomain.AssetUUID) (int64, error) {
 	var ciscoMetadata types.CiscoMetadata
 	err := r.db.WithContext(ctx).
@@ -31,7 +34,6 @@ func (r *CiscoRepo) GetCiscoMetadataIDByAssetID(ctx context.Context, assetID ass
 	return ciscoMetadata.ID, nil
 }
 
-// GetCiscoMetadataIDByScannerID retrieves the Cisco metadata ID for a given scanner
 func (r *CiscoRepo) GetCiscoMetadataIDByScannerID(ctx context.Context, scannerID int64) (int64, error) {
 	var ciscoMetadata types.CiscoMetadata
 	err := r.db.WithContext(ctx).
@@ -43,17 +45,19 @@ func (r *CiscoRepo) GetCiscoMetadataIDByScannerID(ctx context.Context, scannerID
 	return ciscoMetadata.ID, nil
 }
 
-// Cisco Interfaces
+// ============================================================================
+// UNIFIED INTERFACES OPERATIONS (was CiscoInterfaces)
+// ============================================================================
+
 func (r *CiscoRepo) MarkExistingCiscoInterfacesDeleted(ctx context.Context, assetID assetDomain.AssetUUID, ciscoMetadataID int64) error {
 	now := time.Now()
 	return r.db.WithContext(ctx).
-		Table("cisco_interfaces").
-		Where("asset_id = ? AND cisco_metadata_id = ?", assetID.String(), ciscoMetadataID).
+		Table("interfaces").
+		Where("asset_id = ? AND cisco_metadata_id = ? AND scanner_type = 'cisco'", assetID.String(), ciscoMetadataID).
 		Update("updated_at", now).Error
-	// Note: If you want soft deletes, add a deleted_at column and update that instead
 }
 
-func (r *CiscoRepo) StoreCiscoInterfaces(ctx context.Context, interfaces []types.CiscoInterface) error {
+func (r *CiscoRepo) StoreCiscoInterfaces(ctx context.Context, interfaces []types.Interfaces) error {
 	if len(interfaces) == 0 {
 		return nil
 	}
@@ -61,7 +65,10 @@ func (r *CiscoRepo) StoreCiscoInterfaces(ctx context.Context, interfaces []types
 	// Use transaction for batch insert
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, iface := range interfaces {
-			if err := tx.Create(&iface).Error; err != nil {
+			// Ensure this is marked as a Cisco interface
+			iface.ScannerType = "cisco"
+
+			if err := tx.Table("interfaces").Create(&iface).Error; err != nil {
 				return err
 			}
 		}
@@ -69,31 +76,38 @@ func (r *CiscoRepo) StoreCiscoInterfaces(ctx context.Context, interfaces []types
 	})
 }
 
-func (r *CiscoRepo) GetCiscoInterfacesByAssetID(ctx context.Context, assetID assetDomain.AssetUUID) ([]types.CiscoInterface, error) {
-	var interfaces []types.CiscoInterface
+func (r *CiscoRepo) GetCiscoInterfacesByAssetID(ctx context.Context, assetID assetDomain.AssetUUID) ([]types.Interfaces, error) {
+	var interfaces []types.Interfaces
 	err := r.db.WithContext(ctx).
-		Where("asset_id = ?", assetID.String()).
+		Table("interfaces").
+		Where("asset_id = ? AND scanner_type = 'cisco'", assetID.String()).
 		Find(&interfaces).Error
 	return interfaces, err
 }
 
-// Cisco VLANs
+// ============================================================================
+// UNIFIED VLANS OPERATIONS (was CiscoVLANs)
+// ============================================================================
+
 func (r *CiscoRepo) MarkExistingCiscoVLANsDeleted(ctx context.Context, assetID assetDomain.AssetUUID, ciscoMetadataID int64) error {
 	now := time.Now()
 	return r.db.WithContext(ctx).
-		Table("cisco_vlans").
-		Where("asset_id = ? AND cisco_metadata_id = ?", assetID.String(), ciscoMetadataID).
+		Table("vlans").
+		Where("cisco_metadata_id = ? AND scanner_type = 'cisco'", ciscoMetadataID).
 		Update("updated_at", now).Error
 }
 
-func (r *CiscoRepo) StoreCiscoVLANs(ctx context.Context, vlans []types.CiscoVLAN) error {
+func (r *CiscoRepo) StoreCiscoVLANs(ctx context.Context, vlans []types.VLANs) error {
 	if len(vlans) == 0 {
 		return nil
 	}
 
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, vlan := range vlans {
-			if err := tx.Create(&vlan).Error; err != nil {
+			// Ensure this is marked as a Cisco VLAN
+			vlan.ScannerType = "cisco"
+
+			if err := tx.Table("vlans").Create(&vlan).Error; err != nil {
 				return err
 			}
 		}
@@ -101,15 +115,20 @@ func (r *CiscoRepo) StoreCiscoVLANs(ctx context.Context, vlans []types.CiscoVLAN
 	})
 }
 
-func (r *CiscoRepo) GetCiscoVLANsByAssetID(ctx context.Context, assetID assetDomain.AssetUUID) ([]types.CiscoVLAN, error) {
-	var vlans []types.CiscoVLAN
+func (r *CiscoRepo) GetCiscoVLANsByAssetID(ctx context.Context, assetID assetDomain.AssetUUID) ([]types.VLANs, error) {
+	var vlans []types.VLANs
 	err := r.db.WithContext(ctx).
-		Where("asset_id = ?", assetID.String()).
+		Table("vlans").
+		Joins("JOIN interfaces ON vlans.parent_interface_id = interfaces.id").
+		Where("interfaces.asset_id = ? AND vlans.scanner_type = 'cisco'", assetID.String()).
 		Find(&vlans).Error
 	return vlans, err
 }
 
-// Cisco VRFs
+// ============================================================================
+// CISCO VRFs OPERATIONS
+// ============================================================================
+
 func (r *CiscoRepo) MarkExistingCiscoVRFsDeleted(ctx context.Context, assetID assetDomain.AssetUUID, ciscoMetadataID int64) error {
 	now := time.Now()
 	return r.db.WithContext(ctx).
@@ -141,7 +160,10 @@ func (r *CiscoRepo) GetCiscoVRFsByAssetID(ctx context.Context, assetID assetDoma
 	return vrfs, err
 }
 
-// Cisco Routes
+// ============================================================================
+// CISCO ROUTES OPERATIONS
+// ============================================================================
+
 func (r *CiscoRepo) MarkExistingCiscoRoutesDeleted(ctx context.Context, assetID assetDomain.AssetUUID, ciscoMetadataID int64) error {
 	now := time.Now()
 	return r.db.WithContext(ctx).
@@ -173,7 +195,10 @@ func (r *CiscoRepo) GetCiscoRoutesByAssetID(ctx context.Context, assetID assetDo
 	return routes, err
 }
 
-// Cisco Neighbors
+// ============================================================================
+// CISCO NEIGHBORS OPERATIONS
+// ============================================================================
+
 func (r *CiscoRepo) MarkExistingCiscoNeighborsDeleted(ctx context.Context, assetID assetDomain.AssetUUID, ciscoMetadataID int64) error {
 	now := time.Now()
 	return r.db.WithContext(ctx).
@@ -205,26 +230,27 @@ func (r *CiscoRepo) GetCiscoNeighborsByAssetID(ctx context.Context, assetID asse
 	return neighbors, err
 }
 
-// Cleanup methods for removing old data
+// ============================================================================
+// CLEANUP OPERATIONS
+// ============================================================================
+
 func (r *CiscoRepo) DeleteCiscoDataByAssetID(ctx context.Context, assetID assetDomain.AssetUUID) error {
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Delete all Cisco-related data for this asset
 		var err error
 
-		// Delete interfaces
-		err = tx.Where("asset_id = ?", assetID.String()).Delete(&types.CiscoInterface{}).Error
+		// Delete Cisco interfaces from unified interfaces table
+		err = tx.Table("interfaces").
+			Where("asset_id = ? AND scanner_type = 'cisco'", assetID.String()).
+			Delete(&types.Interfaces{}).Error
 		if err != nil {
 			return err
 		}
 
-		// Delete VLANs
-		err = tx.Where("asset_id = ?", assetID.String()).Delete(&types.CiscoVLAN{}).Error
-		if err != nil {
-			return err
-		}
-
-		// Delete VLAN ports
-		err = tx.Where("asset_id = ?", assetID.String()).Delete(&types.CiscoVLANPort{}).Error
+		// Delete Cisco VLANs from unified VLANs table
+		err = tx.Table("vlans").
+			Joins("JOIN interfaces ON vlans.parent_interface_id = interfaces.id").
+			Where("interfaces.asset_id = ? AND vlans.scanner_type = 'cisco'", assetID.String()).
+			Delete(&types.VLANs{}).Error
 		if err != nil {
 			return err
 		}
@@ -251,23 +277,34 @@ func (r *CiscoRepo) DeleteCiscoDataByAssetID(ctx context.Context, assetID assetD
 	})
 }
 
-// Cisco VLAN Ports
+// ============================================================================
+// VLAN PORT OPERATIONS (now part of interfaces table)
+// ============================================================================
+
+// Note: VLAN port functionality is now integrated into the interfaces table
+// The PortType and PortStatus fields in the interfaces table handle this
+
 func (r *CiscoRepo) MarkExistingCiscoVLANPortsDeleted(ctx context.Context, assetID assetDomain.AssetUUID, ciscoMetadataID int64) error {
+	// This now marks interfaces that represent VLAN ports
 	now := time.Now()
 	return r.db.WithContext(ctx).
-		Table("cisco_vlan_ports").
-		Where("asset_id = ? AND cisco_metadata_id = ?", assetID.String(), ciscoMetadataID).
+		Table("interfaces").
+		Where("asset_id = ? AND cisco_metadata_id = ? AND scanner_type = 'cisco' AND port_type IS NOT NULL",
+			assetID.String(), ciscoMetadataID).
 		Update("updated_at", now).Error
 }
 
-func (r *CiscoRepo) StoreCiscoVLANPorts(ctx context.Context, vlanPorts []types.CiscoVLANPort) error {
+func (r *CiscoRepo) StoreCiscoVLANPorts(ctx context.Context, vlanPorts []types.Interfaces) error {
 	if len(vlanPorts) == 0 {
 		return nil
 	}
 
 	return r.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		for _, vlanPort := range vlanPorts {
-			if err := tx.Create(&vlanPort).Error; err != nil {
+			// Ensure this is marked as a Cisco interface with VLAN port data
+			vlanPort.ScannerType = "cisco"
+
+			if err := tx.Table("interfaces").Create(&vlanPort).Error; err != nil {
 				return err
 			}
 		}
@@ -275,18 +312,20 @@ func (r *CiscoRepo) StoreCiscoVLANPorts(ctx context.Context, vlanPorts []types.C
 	})
 }
 
-func (r *CiscoRepo) GetCiscoVLANPortsByAssetID(ctx context.Context, assetID assetDomain.AssetUUID) ([]types.CiscoVLANPort, error) {
-	var vlanPorts []types.CiscoVLANPort
+func (r *CiscoRepo) GetCiscoVLANPortsByAssetID(ctx context.Context, assetID assetDomain.AssetUUID) ([]types.Interfaces, error) {
+	var vlanPorts []types.Interfaces
 	err := r.db.WithContext(ctx).
-		Where("asset_id = ?", assetID.String()).
+		Table("interfaces").
+		Where("asset_id = ? AND scanner_type = 'cisco' AND port_type IS NOT NULL", assetID.String()).
 		Find(&vlanPorts).Error
 	return vlanPorts, err
 }
 
-func (r *CiscoRepo) GetCiscoVLANPortsByVLANID(ctx context.Context, assetID assetDomain.AssetUUID, vlanID int) ([]types.CiscoVLANPort, error) {
-	var vlanPorts []types.CiscoVLANPort
+func (r *CiscoRepo) GetCiscoVLANPortsByVLANID(ctx context.Context, assetID assetDomain.AssetUUID, vlanID int) ([]types.Interfaces, error) {
+	var vlanPorts []types.Interfaces
 	err := r.db.WithContext(ctx).
-		Where("asset_id = ? AND vlan_id = ?", assetID.String(), vlanID).
+		Table("interfaces").
+		Where("asset_id = ? AND scanner_type = 'cisco' AND vlan_id = ?", assetID.String(), vlanID).
 		Find(&vlanPorts).Error
 	return vlanPorts, err
 }

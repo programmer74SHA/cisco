@@ -28,7 +28,7 @@ type InterfaceTypes struct {
 	Description string `gorm:"size:255"`
 
 	// Relationships
-	Interfaces []FirewallInterfaceDetails `gorm:"foreignKey:InterfaceTypeID"`
+	Interfaces []Interfaces `gorm:"foreignKey:InterfaceTypeID"`
 }
 
 func (InterfaceTypes) TableName() string {
@@ -37,16 +37,16 @@ func (InterfaceTypes) TableName() string {
 
 // Assets table (depends on vendors)
 type Assets struct {
-	ID           string  `gorm:"column:id;size:50;primaryKey"`
-	VendorID     uint    `gorm:"not null;index"`
-	Name         string  `gorm:"size:255"`
-	Domain       string  `gorm:"size:255"`
-	Hostname     string  `gorm:"size:255"`
-	OSName       string  `gorm:"size:100;column:os_name"`
-	OSVersion    string  `gorm:"size:100;column:os_version"`
-	Description  string  `gorm:"type:text"`
-	AssetType    string  `gorm:"size:50;default:'firewall';column:asset_type"`
-	DiscoveredBy *string `gorm:"column:discovered_by;size:255"`
+	ID               string     `gorm:"column:id;size:50;primaryKey"`
+	VendorID         uint       `gorm:"not null;index"`
+	Name             string     `gorm:"size:255"`
+	Domain           string     `gorm:"size:255"`
+	Hostname         string     `gorm:"size:255"`
+	OSName           string     `gorm:"size:100;column:os_name"`
+	OSVersion        string     `gorm:"size:100;column:os_version"`
+	Description      string     `gorm:"type:text"`
+	AssetType        string     `gorm:"size:50;default:'firewall';column:asset_type"`
+	DiscoveredBy     *string    `gorm:"column:discovered_by;size:255"`
 	Risk             string     `gorm:"type:enum('low','medium','high','critical');default:'medium'"`
 	LoggingCompleted bool       `gorm:"default:false;column:logging_completed"`
 	AssetValue       float64    `gorm:"type:decimal(15,2);default:0.00;column:asset_value"`

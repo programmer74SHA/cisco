@@ -83,8 +83,7 @@ func (r *FirewallRepo) storeZones(tx *gorm.DB, zones []domain.ZoneData) (map[str
 	return zoneMap, nil
 }
 
-
-// Enhanced VLAN storage with debugging
+// Enhanced VLAN storage with debugging using unified vlans table
 func (r *FirewallRepo) storeVLANs(tx *gorm.DB, vlans []domain.VLANData, interfaceMap map[string]string) (map[int]string, error) {
 	vlanIDMap := make(map[int]string)
 	vlanCount := 0
@@ -116,11 +115,12 @@ func (r *FirewallRepo) storeVLANs(tx *gorm.DB, vlans []domain.VLANData, interfac
 			ParentInterfaceID:    parentInterfaceID,
 			Description:          vlan.Description,
 			IsNative:             false,
+			ScannerType:          "firewall", // Mark as firewall VLAN
 			VendorSpecificConfig: string(vendorConfigJSON),
 		}
 
 		var existingVLAN types.VLANs
-		err := tx.Where("parent_interface_id = ? AND vlan_id = ?",
+		err := tx.Table("vlans").Where("parent_interface_id = ? AND vlan_id = ?",
 			parentInterfaceID, vlan.VLANID).
 			FirstOrCreate(&existingVLAN, vlanRecord).Error
 		if err != nil {
@@ -184,11 +184,12 @@ func (r *FirewallRepo) storeVLANs(tx *gorm.DB, vlans []domain.VLANData, interfac
 					ParentInterfaceID:    parentID,
 					Description:          fmt.Sprintf("VLAN %d on %s", vlanID, parentName),
 					IsNative:             false,
+					ScannerType:          "firewall", // Mark as firewall VLAN
 					VendorSpecificConfig: string(vendorConfigJSON),
 				}
 
 				var existingVLAN types.VLANs
-				err = tx.Where("parent_interface_id = ? AND vlan_id = ?", parentID, vlanID).
+				err = tx.Table("vlans").Where("parent_interface_id = ? AND vlan_id = ?", parentID, vlanID).
 					FirstOrCreate(&existingVLAN, vlan).Error
 				if err != nil {
 					log.Printf("ERROR: Failed to create VLAN %d for interface %s: %v", vlanID, interfaceName, err)
@@ -276,7 +277,6 @@ func (r *FirewallRepo) ensureFirewallDetails(tx *gorm.DB, assetID string) error 
 	return nil
 }
 
-// Add debugging to zone details storage
 func (r *FirewallRepo) storeZoneDetails(tx *gorm.DB, interfaces []domain.InterfaceData, zoneMap map[string]string, interfaceMap map[string]string, vlanIDMap map[int]string) error {
 	relationshipCount := 0
 
@@ -358,10 +358,11 @@ func (r *FirewallRepo) storeZoneDetails(tx *gorm.DB, interfaces []domain.Interfa
 					ParentInterfaceID:    interfaceID,
 					Description:          fmt.Sprintf("Default VLAN for interface %s", interfaceName),
 					IsNative:             true,
+					ScannerType:          "firewall", // Mark as firewall VLAN
 					VendorSpecificConfig: `{"vlan_type":"default","is_native":true}`,
 				}
 
-				if err := tx.Create(&defaultVLAN).Error; err != nil {
+				if err := tx.Table("vlans").Create(&defaultVLAN).Error; err != nil {
 					log.Printf("ERROR: Failed to create default VLAN: %v", err)
 					continue
 				}
@@ -377,16 +378,16 @@ func (r *FirewallRepo) storeZoneDetails(tx *gorm.DB, interfaces []domain.Interfa
 
 		zoneDetailID := uuid.New().String()
 		zoneDetail := types.ZoneDetails{
-			ID:                  zoneDetailID,
-			ZoneID:              zoneID,
-			FirewallInterfaceID: interfaceID,
-			VLANTableID:         vlanTableID,
+			ID:           zoneDetailID,
+			ZoneID:       zoneID,
+			InterfaceID:  interfaceID,  // Updated field name
+			VLANTableID:  vlanTableID,
 		}
 
 		err := tx.FirstOrCreate(&zoneDetail, types.ZoneDetails{
-			ZoneID:              zoneID,
-			FirewallInterfaceID: interfaceID,
-			VLANTableID:         vlanTableID,
+			ZoneID:       zoneID,
+			InterfaceID:  interfaceID,  // Updated field name
+			VLANTableID:  vlanTableID,
 		}).Error
 
 		if err != nil {
@@ -401,6 +402,8 @@ func (r *FirewallRepo) storeZoneDetails(tx *gorm.DB, interfaces []domain.Interfa
 	log.Printf("Zone details storage complete: %d relationships created", relationshipCount)
 	return nil
 }
+
+// ... [Rest of the methods remain similar but with updated field names] ...
 
 // Enhanced policy storage with debugging
 func (r *FirewallRepo) storePolicies(tx *gorm.DB, firewallDetailsID string, policies []domain.PolicyData, zoneMap map[string]string) error {

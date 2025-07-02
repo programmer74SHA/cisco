@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net"
@@ -104,7 +105,7 @@ func (r *CiscoRunner) getDefaultPort(scanner scannerDomain.ScannerDomain) string
 	if scanner.Port != "" {
 		return scanner.Port
 	}
-	return "22" 
+	return "22"
 }
 
 // performScan executes the actual device scan via SSH
@@ -192,7 +193,7 @@ type SSHConnector struct{}
 func NewSSHConnector() *SSHConnector {
 	return &SSHConnector{}
 }
- 
+
 // Connect establishes SSH connection
 func (c *SSHConnector) Connect(ctx context.Context, config ConnectConfig) (Connection, error) {
 	sshConfig := &ssh.ClientConfig{
@@ -822,24 +823,43 @@ func (p *CiscoDataProcessor) storeInterfaces(ctx context.Context, interfaces []s
 
 	p.ciscoRepo.MarkExistingCiscoInterfacesDeleted(ctx, assetID, ciscoMetadataID)
 
-	var records []types.CiscoInterface
+	var records []types.Interfaces // Changed from types.CiscoInterface
 	now := time.Now()
 
 	for _, iface := range interfaces {
-		records = append(records, types.CiscoInterface{
+		// Convert CiscoInterface to unified Interfaces structure
+		interfaceRecord := types.Interfaces{
 			ID:              uuid.New().String(),
-			CiscoMetadataID: ciscoMetadataID,
-			AssetID:         assetID.String(),
-			Name:            iface.Name,
-			Description:     iface.Description,
-			IPAddress:       iface.IPAddress,
-			SubnetMask:      iface.SubnetMask,
-			Status:          iface.Status,
-			Protocol:        iface.Protocol,
-			MacAddress:      iface.MacAddress,
-			CreatedAt:       now,
-			UpdatedAt:       now,
-		})
+			InterfaceName:   iface.Name,
+			InterfaceTypeID: 1, // Default interface type - you may want to determine this dynamically
+			AssetID:         &assetID.String(),
+			ScannerType:     "cisco", // Mark as Cisco interface
+			CiscoMetadataID: &ciscoMetadataID,
+
+			// Cisco-specific fields
+			Description:       iface.Description,
+			IPAddress:         iface.IPAddress,
+			SubnetMask:        iface.SubnetMask,
+			OperationalStatus: normalizeStatus(iface.Status),
+			AdminStatus:       normalizeStatus(iface.Protocol),
+			MacAddress:        iface.MacAddress,
+			Protocol:          iface.Protocol, // Cisco protocol field
+
+			// Timestamps
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+
+		// Add vendor-specific config
+		vendorConfig := map[string]interface{}{
+			"cisco_interface": true,
+			"vlans":           iface.VLANs,
+		}
+		if vendorConfigJSON, err := json.Marshal(vendorConfig); err == nil {
+			interfaceRecord.VendorSpecificConfig = string(vendorConfigJSON)
+		}
+
+		records = append(records, interfaceRecord)
 	}
 
 	return p.ciscoRepo.StoreCiscoInterfaces(ctx, records)
@@ -852,22 +872,93 @@ func (p *CiscoDataProcessor) storeVLANs(ctx context.Context, vlans []scannerDoma
 
 	p.ciscoRepo.MarkExistingCiscoVLANsDeleted(ctx, assetID, ciscoMetadataID)
 
-	var records []types.CiscoVLAN
+	var records []types.VLANs // Changed from types.CiscoVLAN
 	now := time.Now()
 
+	// First, get interfaces for this asset to find parent interfaces
+	interfaces, err := p.ciscoRepo.GetCiscoInterfacesByAssetID(ctx, assetID)
+	if err != nil {
+		return fmt.Errorf("failed to get interfaces for VLAN parent mapping: %w", err)
+	}
+
+	// Create a mapping of interface names to IDs
+	interfaceNameToID := make(map[string]string)
+	for _, intf := range interfaces {
+		interfaceNameToID[intf.InterfaceName] = intf.ID
+	}
+
 	for _, vlan := range vlans {
-		records = append(records, types.CiscoVLAN{
-			ID:              uuid.New().String(),
-			CiscoMetadataID: ciscoMetadataID,
-			AssetID:         assetID.String(),
-			VlanID:          vlan.ID,
-			Name:            vlan.Name,
-			Status:          vlan.Status,
-			Type:            vlan.Type,
-			Parent:          vlan.Parent,
-			CreatedAt:       now,
-			UpdatedAt:       now,
-		})
+		// Determine parent interface - for Cisco VLANs, we need to find a suitable parent
+		// This could be based on VLAN ports or a default interface
+		var parentInterfaceID string
+		if len(vlan.Ports) > 0 {
+			// Use the first port as parent interface
+			firstPort := vlan.Ports[0]
+			if parentID, exists := interfaceNameToID[firstPort]; exists {
+				parentInterfaceID = parentID
+			}
+		}
+
+		// If no parent found, create a virtual parent interface
+		if parentInterfaceID == "" {
+			virtualInterfaceID := uuid.New().String()
+			virtualInterface := types.Interfaces{
+				ID:                virtualInterfaceID,
+				InterfaceName:     fmt.Sprintf("VLAN%d-Parent", vlan.ID),
+				InterfaceTypeID:   1,
+				AssetID:           &assetID.String(),
+				ScannerType:       "cisco",
+				CiscoMetadataID:   &ciscoMetadataID,
+				Description:       fmt.Sprintf("Virtual parent interface for VLAN %d", vlan.ID),
+				OperationalStatus: "up",
+				AdminStatus:       "up",
+				CreatedAt:         now,
+				UpdatedAt:         now,
+			}
+
+			// Store the virtual parent interface
+			if err := p.ciscoRepo.StoreCiscoInterfaces(ctx, []types.Interfaces{virtualInterface}); err != nil {
+				log.Printf("Error creating virtual parent interface for VLAN %d: %v", vlan.ID, err)
+				continue
+			}
+
+			parentInterfaceID = virtualInterfaceID
+		}
+
+		// Convert CiscoVLAN to unified VLANs structure
+		vlanRecord := types.VLANs{
+			ID:                uuid.New().String(),
+			VLANID:            vlan.ID,
+			VLANName:          vlan.Name,
+			ParentInterfaceID: parentInterfaceID,
+			Description:       fmt.Sprintf("Cisco VLAN %d - %s", vlan.ID, vlan.Name),
+			ScannerType:       "cisco", // Mark as Cisco VLAN
+			CiscoMetadataID:   &ciscoMetadataID,
+
+			// Cisco-specific fields
+			Status: vlan.Status,
+			Type:   vlan.Type,
+
+			// Timestamps
+			CreatedAt: now,
+			UpdatedAt: now,
+		}
+
+		// Handle parent VLAN
+		if vlan.Parent != 0 {
+			vlanRecord.Parent = &vlan.Parent
+		}
+
+		// Add vendor-specific config
+		vendorConfig := map[string]interface{}{
+			"cisco_vlan": true,
+			"ports":      vlan.Ports,
+		}
+		if vendorConfigJSON, err := json.Marshal(vendorConfig); err == nil {
+			vlanRecord.VendorSpecificConfig = string(vendorConfigJSON)
+		}
+
+		records = append(records, vlanRecord)
 	}
 
 	return p.ciscoRepo.StoreCiscoVLANs(ctx, records)
@@ -958,55 +1049,83 @@ func (p *CiscoDataProcessor) storeVLANPorts(ctx context.Context, vlanPorts []sca
 
 	p.ciscoRepo.MarkExistingCiscoVLANPortsDeleted(ctx, assetID, ciscoMetadataID)
 
-	var records []types.CiscoVLANPort
+	var records []types.Interfaces // VLAN ports are now stored as interfaces
 	now := time.Now()
 
-	// First, get all VLANs for this asset to map VLAN IDs to VLAN record IDs
-	vlanRecords, err := p.ciscoRepo.GetCiscoVLANsByAssetID(ctx, assetID)
+	// Get existing VLANs for this asset to create relationships
+	vlans, err := p.ciscoRepo.GetCiscoVLANsByAssetID(ctx, assetID)
 	if err != nil {
-		return fmt.Errorf("failed to get VLAN records: %w", err)
+		return fmt.Errorf("failed to get VLANs for VLAN port mapping: %w", err)
 	}
 
 	// Create a map of VLAN ID to VLAN record ID
-	vlanIDMap := make(map[int]string)
-	for _, vlan := range vlanRecords {
-		vlanIDMap[vlan.VlanID] = vlan.ID
+	vlanIDToRecordID := make(map[int]string)
+	for _, vlan := range vlans {
+		vlanIDToRecordID[vlan.VLANID] = vlan.ID
 	}
 
 	for _, vlanPort := range vlanPorts {
-		// Try to match the interface by name
-		var ciscoInterfaceID *string
-		interfaces, err := p.ciscoRepo.GetCiscoInterfacesByAssetID(ctx, assetID)
-		if err == nil {
-			for _, iface := range interfaces {
-				if strings.EqualFold(iface.Name, vlanPort.PortName) {
-					ciscoInterfaceID = &iface.ID
-					break
-				}
-			}
+		// Create an interface record that represents the VLAN port
+		portInterface := types.Interfaces{
+			ID:              uuid.New().String(),
+			InterfaceName:   vlanPort.PortName,
+			InterfaceTypeID: 1, // Default interface type
+			AssetID:         &assetID.String(),
+			ScannerType:     "cisco",
+			CiscoMetadataID: &ciscoMetadataID,
+
+			// VLAN port specific fields
+			VLANId:     &vlanPort.VlanID,
+			PortType:   vlanPort.PortType,
+			PortStatus: vlanPort.PortStatus,
+
+			// Basic interface fields
+			Description:       fmt.Sprintf("VLAN %d port: %s", vlanPort.VlanID, vlanPort.PortName),
+			OperationalStatus: normalizePortStatus(vlanPort.PortStatus),
+			AdminStatus:       "up",
+
+			// Timestamps
+			CreatedAt: now,
+			UpdatedAt: now,
 		}
 
-		// Get the VLAN record ID
-		ciscoVLANID, exists := vlanIDMap[vlanPort.VlanID]
-		if !exists {
-			log.Printf("Warning: VLAN ID %d not found for port %s", vlanPort.VlanID, vlanPort.PortName)
-			continue
+		// Add vendor-specific config
+		vendorConfig := map[string]interface{}{
+			"cisco_vlan_port": true,
+			"vlan_id":         vlanPort.VlanID,
+			"vlan_name":       vlanPort.VlanName,
+			"port_type":       vlanPort.PortType,
+		}
+		if vendorConfigJSON, err := json.Marshal(vendorConfig); err == nil {
+			portInterface.VendorSpecificConfig = string(vendorConfigJSON)
 		}
 
-		records = append(records, types.CiscoVLANPort{
-			ID:               uuid.New().String(),
-			CiscoMetadataID:  ciscoMetadataID,
-			AssetID:          assetID.String(),
-			CiscoVLANID:      ciscoVLANID,
-			CiscoInterfaceID: ciscoInterfaceID,
-			VlanID:           vlanPort.VlanID,
-			PortName:         vlanPort.PortName,
-			PortType:         vlanPort.PortType,
-			PortStatus:       vlanPort.PortStatus,
-			CreatedAt:        now,
-			UpdatedAt:        now,
-		})
+		records = append(records, portInterface)
 	}
 
 	return p.ciscoRepo.StoreCiscoVLANPorts(ctx, records)
+}
+
+func normalizeStatus(status string) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch status {
+	case "up", "active", "enabled":
+		return "up"
+	case "down", "inactive", "disabled", "administratively down":
+		return "down"
+	default:
+		return "unknown"
+	}
+}
+
+func normalizePortStatus(status string) string {
+	status = strings.ToLower(strings.TrimSpace(status))
+	switch status {
+	case "active", "up", "enabled":
+		return "up"
+	case "inactive", "down", "disabled":
+		return "down"
+	default:
+		return "unknown"
+	}
 }
